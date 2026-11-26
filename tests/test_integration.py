@@ -82,7 +82,21 @@ def test_full_training_forecast_and_replay(monkeypatch, raw_prices):
         assert conn.execute("SELECT COUNT(*) AS n FROM daily_prices WHERE instrument_id = %s",
                             (loaded["instrument_id"],)).fetchone()["n"] == len(raw_prices)
 
-    corrupt = raw_prices.drop(raw_prices.index[5])
+    updated = raw_prices.copy()
+    changed_date = updated.index[-3]
+    updated.loc[changed_date, "Close"] += 0.5
+    monkeypatch.setattr(extract, "fetch_history", lambda *args: updated)
+    corrected, _ = load(full)
+    correction = workflow.summarize_run(corrected)["details"]["tickers"][ticker]
+    assert correction["status"] == "success" and correction["corrected"] == 1
+    with db.connect() as conn:
+        prices = db.read_history(conn, loaded["instrument_id"]).set_index("trade_date")
+        features = db.read_features(conn, loaded["instrument_id"], date(2024, 12, 31)).set_index("trade_date")
+    expected_average = updated["Close"].rolling(5).mean().loc[changed_date]
+    assert prices.loc[changed_date, "close"] == pytest.approx(updated.loc[changed_date, "Close"])
+    assert features.loc[changed_date, "sma_5"] == pytest.approx(expected_average)
+
+    corrupt = updated.drop(updated.index[5])
     monkeypatch.setattr(extract, "fetch_history", lambda *args: corrupt)
     rejected_id = str(uuid4())
     bad, = workflow.prepare_run(rejected_id, "etl", full)
