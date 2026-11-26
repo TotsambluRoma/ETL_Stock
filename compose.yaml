@@ -1,0 +1,172 @@
+name: stock-pipeline
+
+x-market-db: &market-db
+  PIPELINE_DB_HOST: postgres
+  PIPELINE_DB_NAME: market
+  PIPELINE_DB_USER: market
+  PIPELINE_DB_PASSWORD: ${PIPELINE_DB_PASSWORD:?Создайте .env}
+  PIPELINE_CA: /tls/generated/ca.crt
+
+x-runtime: &runtime
+  image: stock-pipeline-runtime:3.1.8
+  build: .
+
+services:
+  tls-init:
+    image: alpine/openssl:3.5.0
+    entrypoint: ["/bin/sh", "/scripts/tls-init.sh"]
+    volumes:
+      - ./infra/tls-init.sh:/scripts/tls-init.sh:ro
+      - tls:/tls
+
+  postgres:
+    image: postgres:17.8-bookworm
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Создайте .env}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?Создайте .env}
+      PIPELINE_DB_PASSWORD: ${PIPELINE_DB_PASSWORD:?Создайте .env}
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/tls/generated/postgres/public.crt
+      - -c
+      - ssl_key_file=/tls/generated/postgres/private.key
+      - -c
+      - hba_file=/etc/stock/pg_hba.conf
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - tls:/tls:ro
+      - ./infra/init-db.sh:/docker-entrypoint-initdb.d/10-market.sh:ro
+      - ./infra/schema.sql:/schema/schema.sql:ro
+      - ./infra/pg_hba.conf:/etc/stock/pg_hba.conf:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          PGSSLMODE=verify-full PGSSLROOTCERT=/tls/generated/ca.crt PGPASSWORD="$$PIPELINE_DB_PASSWORD"
+          psql -h 127.0.0.1 -U market -d market -Atqc 'SELECT 1 FROM pipeline_runs LIMIT 0'
+      interval: 5s
+      timeout: 4s
+      retries: 20
+
+  minio:
+    build:
+      context: .
+      dockerfile: infra/minio.Dockerfile
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Создайте .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Создайте .env}
+    command: ["server", "/data", "--certs-dir", "/tls/generated/minio", "--console-address", ":9001"]
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+      - tls:/tls:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--cacert", "/tls/generated/ca.crt", "https://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+
+  airflow:
+    <<: *runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      <<: *market-db
+      MINIO_ENDPOINT: https://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Создайте .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Создайте .env}
+      AIRFLOW_UI_USER: ${AIRFLOW_UI_USER:?Создайте .env}
+      AIRFLOW_UI_PASSWORD: ${AIRFLOW_UI_PASSWORD:?Создайте .env}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?Создайте .env}@postgres:5432/airflow?sslmode=verify-full&sslrootcert=/tls/generated/ca.crt
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://127.0.0.1:8080/execution/
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/stock/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__CORE__PARALLELISM: "4"
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?Создайте .env}
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_UI_USER:?Создайте .env}:admin
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/ui-passwords.json
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Создайте .env}
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      MAIL_FROM: ${MAIL_FROM:?Создайте .env}
+      MAIL_TO: ${MAIL_TO:?Создайте .env}
+    entrypoint: ["/usr/bin/dumb-init", "--", "python", "/opt/stock/scripts/start_airflow.py"]
+    command: []
+    ports:
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
+    volumes:
+      - airflow_home:/opt/airflow
+      - ./config:/opt/stock/config:ro
+      - tls:/tls:ro
+
+  mailpit:
+    image: axllent/mailpit:v1.27.9
+    environment:
+      MP_DATABASE: /data/mailpit.db
+    volumes:
+      - mail_data:/data
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+
+  metrics:
+    <<: *runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *market-db
+    entrypoint: ["/usr/bin/dumb-init", "--", "python", "-m", "pipeline.monitoring"]
+    command: []
+    volumes:
+      - tls:/tls:ro
+
+  prometheus:
+    image: prom/prometheus:v3.10.0
+    depends_on:
+      - metrics
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  grafana:
+    image: grafana/grafana:12.4.4
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Создайте .env}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+
+volumes:
+  tls:
+  postgres_data:
+  minio_data:
+  airflow_home:
+  mail_data:
+  prometheus_data:
+  grafana_data:

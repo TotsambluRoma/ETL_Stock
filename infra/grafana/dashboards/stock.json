@@ -1,0 +1,42 @@
+{
+  "title": "Конвейер котировок",
+  "uid": "stock-pipeline",
+  "schemaVersion": 39,
+  "timezone": "browser",
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Итог последнего запуска",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "stock-prometheus"},
+      "targets": [{"expr": "stock_pipeline_last_status", "instant": true, "legendFormat": "{{operation}}: {{status}}", "refId": "A"}],
+      "options": {"textMode": "name"}
+    },
+    {
+      "id": 2,
+      "title": "Отклонённые строки",
+      "type": "stat",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "stock-prometheus"},
+      "targets": [{"expr": "stock_pipeline_last_rejected_rows{operation=\"etl\"}", "instant": true, "refId": "A"}]
+    },
+    {
+      "id": 3,
+      "title": "Длительность, с",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 6, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "stock-prometheus"},
+      "targets": [{"expr": "stock_pipeline_last_duration_seconds", "legendFormat": "{{operation}}", "refId": "A"}]
+    },
+    {
+      "id": 4,
+      "title": "Отставание котировки в торговых сессиях",
+      "type": "stat",
+      "gridPos": {"x": 12, "y": 6, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "stock-prometheus"},
+      "targets": [{"expr": "stock_pipeline_quote_lag_sessions", "instant": true, "legendFormat": "{{ticker}}", "refId": "A"}]
+    }
+  ]
+}
