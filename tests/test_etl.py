@@ -62,16 +62,25 @@ def test_snapshot_is_reused_on_retry(monkeypatch, raw_prices):
 def test_yahoo_query_arguments_and_empty_response(monkeypatch):
     import yfinance
 
+    cache_paths = []
+
     class Stock:
         def history(self, **options):
+            assert len(cache_paths) == 1
             assert options["start"] == "2024-09-03" and options["end"] == "2025-01-01"
             assert options["interval"] == "1d" and options["actions"] and options["keepna"]
             assert not options["auto_adjust"] and not options["repair"]
             return pd.DataFrame()
 
     monkeypatch.setattr(yfinance, "Ticker", lambda ticker: Stock())
-    with pytest.raises(extract.QuoteUnavailable):
-        extract.fetch_history("AAPL", date(2024, 9, 3), date(2025, 1, 1), 20)
+    monkeypatch.setattr(yfinance, "set_tz_cache_location", cache_paths.append)
+    extract._yahoo_client.cache_clear()
+    try:
+        for ticker in ("AAPL", "MSFT"):
+            with pytest.raises(extract.QuoteUnavailable):
+                extract.fetch_history(ticker, date(2024, 9, 3), date(2025, 1, 1), 20)
+    finally:
+        extract._yahoo_client.cache_clear()
 
 
 def test_duplicate_and_conflict(raw_prices):

@@ -1,4 +1,6 @@
 from datetime import UTC, date, datetime
+from functools import cache
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
@@ -9,9 +11,18 @@ class QuoteUnavailable(RuntimeError):
     """The provider has no usable response yet."""
 
 
-def fetch_history(ticker: str, start: date, end: date, timeout: int) -> pd.DataFrame:
+@cache
+def _yahoo_client():
+    # Параллельные процессы используют разные файлы SQLite.
+    directory = TemporaryDirectory(prefix="stock-yfinance-", ignore_cleanup_errors=True)
     import yfinance as yf
 
+    yf.set_tz_cache_location(directory.name)
+    return yf, directory
+
+
+def fetch_history(ticker: str, start: date, end: date, timeout: int) -> pd.DataFrame:
+    yf, _ = _yahoo_client()
     prices = yf.Ticker(ticker).history(
         start=start.isoformat(), end=end.isoformat(), interval="1d",
         auto_adjust=False, actions=True, repair=False, keepna=True, timeout=timeout,
