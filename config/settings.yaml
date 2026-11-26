@@ -1,0 +1,6 @@
+schedule: "0 7 * * *"
+overlap_sessions: 5
+request_timeout_seconds: 20
+retry_count: 2
+retry_delay_minutes: 5
+bucket: stock-pipeline

@@ -1,0 +1,4 @@
+ticker,company_name,exchange,currency,start_date,active
+AAPL,Apple,XNAS,USD,2018-01-01,true
+MSFT,Microsoft,XNAS,USD,2018-01-01,true
+NVDA,NVIDIA,XNAS,USD,2018-01-01,true
