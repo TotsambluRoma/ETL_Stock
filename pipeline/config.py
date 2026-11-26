@@ -49,9 +49,12 @@ def read_instruments() -> list[Instrument]:
     seen = set()
     with (CONFIG_DIR / "tickers.csv").open(encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file)
-        if set(reader.fieldnames or ()) != required:
+        fields = reader.fieldnames or []
+        if len(fields) != len(required) or set(fields) != required:
             raise ValueError("У tickers.csv неверный заголовок.")
         for row in reader:
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError(f"Неверное число полей в строке {reader.line_num} tickers.csv.")
             ticker, name = row["ticker"].strip().upper(), row["company_name"].strip()
             exchange, currency = row["exchange"].strip(), row["currency"].strip()
             active = row["active"].strip().lower()

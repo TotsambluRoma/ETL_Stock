@@ -94,7 +94,7 @@ def read_history(conn, instrument) -> pd.DataFrame:
     ).fetchall()
     history = pd.DataFrame(rows, columns=fields)
     history["trade_date"] = pd.to_datetime(history["trade_date"])
-    return history
+    return history.astype({field: "int64" if field == "volume" else "float64" for field in PRICE_FIELDS})
 
 
 def history_revision(conn, instrument) -> str:

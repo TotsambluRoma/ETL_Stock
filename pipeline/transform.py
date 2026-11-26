@@ -56,9 +56,8 @@ def prepare_changes(prices: pd.DataFrame, existing: pd.DataFrame) -> tuple[pd.Da
     if changed.empty:
         return changed.reset_index(), pd.DataFrame(columns=["trade_date", *FEATURES]), 0
 
-    history = pd.concat([
-        existing.loc[~existing["trade_date"].isin(prices["trade_date"])], prices
-    ], ignore_index=True).sort_values("trade_date")
+    other_dates = existing.loc[~existing["trade_date"].isin(prices["trade_date"])]
+    history = prices if other_dates.empty else pd.concat([other_dates, prices], ignore_index=True)
     sessions = schedule(history["trade_date"].min().date(), history["trade_date"].max().date()).index
     first_changed = changed.index.min()
     start = max(0, sessions.searchsorted(first_changed) - 20)
